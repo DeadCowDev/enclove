@@ -1,0 +1,26 @@
+name: enclove
+description: "A new Flutter project."
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.5.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_nearby_connections:
+    path: ./packages/flutter_nearby_connections
+  flutter_styled_toast: ^2.2.1
+  permission_handler: ^10.2.0
+  device_info: ^2.0.3
+  sqflite: ^2.0.0+4
+  path_provider: ^2.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
