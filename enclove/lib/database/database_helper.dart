@@ -130,8 +130,13 @@ class DatabaseHelper {
   Future<void> deleteEnclave(int enclaveId) async {
     final db = await instance.database;
 
+    // await db.execute(
+    //   'DELETE FROM messages WHERE enclave_id = ?',
+    //   [enclaveId],
+    // );
+
     await db.execute(
-      'DELETE FROM messages WHERE enclave_id = ?',
+      'DELETE FROM pins WHERE enclave_id = ?',
       [enclaveId],
     );
 

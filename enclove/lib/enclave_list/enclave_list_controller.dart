@@ -14,11 +14,11 @@ class EnclaveListController {
   late NearbyServiceManager nearbyServiceManager;
 
   EnclaveListController({required this.onDataChanged, required this.nearbyServiceManager}) {
-    // nearbyServiceManager = NearbyServiceManager(onDeviceUpdate: (devices) {
-    //   nearbyDevices = devices;
-    //   onDataChanged(); // Notify UI when device list changes
-    // });
-    //nearbyServiceManager.initializeNearbyService();
+    nearbyServiceManager.onDeviceUpdate.add((devices) {
+      onDataChanged();
+    });
+
+    nearbyServiceManager.initializeNearbyService();
   }
 
   Future<void> loadEnclaves() async {
@@ -28,8 +28,19 @@ class EnclaveListController {
     onDataChanged();
   }
 
+  void handleJoinApproval(String enclaveName) async {
+    await DatabaseHelper.instance.joinEnclave(enclaveName);
+    await loadEnclaves();
+  }
+
   void sendEnclaveList(String deviceId) {
-    nearbyServiceManager.sendEnclaveList(deviceId, ownedEnclaves);
+
+      final message = jsonEncode({
+        'type': 'enclave_list',
+        'enclaves': ownedEnclaves,
+      });
+
+    nearbyServiceManager.sendMessage(deviceId, message);
   }
 
   Future<void> connectToDevice(Device device) async {

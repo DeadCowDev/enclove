@@ -3,12 +3,11 @@ import 'dart:convert';
 import 'package:flutter_nearby_connections/flutter_nearby_connections.dart';
 
 class NearbyServiceManager{
-  final Function(List<Device>) onDeviceUpdate;
+  List<Function(List<Device>)> onDeviceUpdate = [];
+  List<Function(dynamic)> onDataReceived = [];
   late NearbyService nearbyService;
   late StreamSubscription subscription;
   List<Device> nearbyDevices = [];
-
-  NearbyServiceManager({required this.onDeviceUpdate});
 
   void initializeNearbyService() async {
     nearbyService = NearbyService();
@@ -23,11 +22,21 @@ class NearbyServiceManager{
     );
 
     nearbyService.stateChangedSubscription(callback: (devices) {
-      onDeviceUpdate(devices); // Update the device list in the controller
+      nearbyDevices = devices;
+      for (var update in onDeviceUpdate) {
+        update(devices);
+      }
+    });
+
+    nearbyService.dataReceivedSubscription(callback: (data) {
+      for (var update in onDataReceived) {
+        update(data);
+      }
     });
 
     await startBrowsingForDevices();
    }
+
 
   Future<void> startBrowsingForDevices() async {
     await nearbyService.startAdvertisingPeer();
@@ -48,13 +57,17 @@ class NearbyServiceManager{
     nearbyService.stopAdvertisingPeer();
   }
 
-  void sendEnclaveList(String deviceId, List<Map<String, dynamic>> enclaves) {
-    final message = jsonEncode({
-      'type': 'enclave_list',
-      'enclaves': enclaves,
-    });
+  void sendMessage(String deviceId, String message){
     nearbyService.sendMessage(deviceId, message);
   }
+
+  // void sendEnclaveList(String deviceId, List<Map<String, dynamic>> enclaves) {
+  //   final message = jsonEncode({
+  //     'type': 'enclave_list',
+  //     'enclaves': enclaves,
+  //   });
+  //   nearbyService.sendMessage(deviceId, message);
+  // }
 
   String getStateName(SessionState state) {
     switch (state) {

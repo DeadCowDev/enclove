@@ -1,4 +1,6 @@
 
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import '../nearby_service_manager.dart';
 import './enclave_list_controller.dart';
@@ -24,6 +26,20 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
     enclaveController = EnclaveListController(onDataChanged: () {();
       setState(() { }); // Trigger UI update on data change
     }, nearbyServiceManager: widget.nearbyServiceManager);
+
+    // Add data received callback to show notifications or dialogs in the UI
+    widget.nearbyServiceManager.onDataReceived.add((data) {
+      final receivedMessage  = jsonDecode(data['message']);
+      if (receivedMessage['type'] == 'enclave_list') {
+        showEnclavesToJoin(receivedMessage['enclaves'], data['deviceId']);
+      } else if (receivedMessage['type'] == 'join_request') {
+        showJoinRequest(receivedMessage['enclave_name'], data['deviceId']);
+      } else if (receivedMessage['type'] == 'join_approval') {
+        enclaveController.handleJoinApproval(receivedMessage['enclave_name']);
+      }
+    });
+
+
     enclaveController.loadEnclaves();
     nearbyServiceManager = widget.nearbyServiceManager;
   }
@@ -63,6 +79,77 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
   void dispose() {
     enclaveController.dispose();
     super.dispose();
+  }
+
+  void showEnclavesToJoin(List enclaves, String deviceId) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text("Join an Enclave"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: enclaves.map<Widget>((enclave) {
+              return ListTile(
+                title: Text(enclave['name']),
+                subtitle: Text(enclave['description']),
+                onTap: () => requestJoinEnclave(enclave['name'], deviceId),
+              );
+            }).toList(),
+          ),
+        );
+      },
+    );
+  }
+
+  void requestJoinEnclave(String enclaveName, String deviceId) {
+    final message = jsonEncode({
+      'type': 'join_request',
+      'enclave_name': enclaveName,
+    });
+    nearbyServiceManager.sendMessage(deviceId, message);
+    Navigator.of(context).pop();
+  }
+
+  void showJoinRequest(String enclaveName, String deviceId) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text("Join Request"),
+          content: Text("User requests to join your enclave: $enclaveName"),
+          actions: [
+            TextButton(
+              onPressed: () {
+                approveJoinRequest(enclaveName, deviceId);
+                Navigator.of(context).pop();
+              },
+              child: Text("Approve"),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text("Deny"),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void approveJoinRequest(String enclaveName, String deviceId) {
+    final message = jsonEncode({
+      'type': 'join_approval',
+      'enclave_name': enclaveName,
+    });
+    nearbyServiceManager.sendMessage(deviceId, message);
+  }
+
+  void sendEnclaveList(String deviceId) {
+    final message = jsonEncode({
+      'type': 'enclave_list',
+      'enclaves': enclaveController.ownedEnclaves,
+    });
+    nearbyServiceManager.sendMessage(deviceId, message);
   }
 
   void showCreateEnclaveDialog(BuildContext context, EnclaveListController controller) {

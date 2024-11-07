@@ -1,6 +1,5 @@
 // main.dart
 import 'package:flutter/material.dart';
-import 'package:flutter_styled_toast/flutter_styled_toast.dart';
 import 'enclave_list/enclave_list_screen.dart';
 import 'nearby_service_manager.dart';
 import 'permissions_handler.dart';
@@ -8,11 +7,7 @@ import 'permissions_handler.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await PermissionsHandler.requestPermissions();
-  final nearbyServiceManager = NearbyServiceManager(
-    onDeviceUpdate: (devices) {
-      print("Devices updated: ${devices.length}");
-    },
-  );// Initialize the manager
+  final nearbyServiceManager = NearbyServiceManager();// Initialize the manager
   nearbyServiceManager.initializeNearbyService();
   runApp(MyApp(nearbyServiceManager: nearbyServiceManager));
 }
