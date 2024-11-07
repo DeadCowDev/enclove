@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'package:path_provider/path_provider.dart';
 import 'package:sqlite_crdt/sqlite_crdt.dart';
+import 'package:path/path.dart';
+
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._privateConstructor();
@@ -16,7 +19,12 @@ class DatabaseHelper {
 
   Future<SqliteCrdt> _initDatabase() async {
     // Initialize CRDT database and return it
-    return await SqliteCrdt.openInMemory(
+
+    var documentsDirectory = await getApplicationDocumentsDirectory();
+    String path = join(documentsDirectory.path, 'enclaves.db');
+
+    return await SqliteCrdt.open(
+        path,
         version: 1,
         onCreate: (db, version) async {
           await db.execute('''

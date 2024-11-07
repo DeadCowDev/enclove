@@ -40,14 +40,14 @@ class EnclavesScreen extends StatefulWidget {
 }
 
 class _EnclavesScreenState extends State<EnclavesScreen> {
-  List<Map<String, dynamic>> ownedEnclaves = []; // Enclaves this user owns
-  List<Map<String, dynamic>> joinedEnclaves = []; // Enclaves this user has joined
+  List<Map<String, dynamic>> ownedEnclaves = [];
+  List<Map<String, dynamic>> joinedEnclaves = [];
   List<Device> nearbyDevices = [];
   int? selectedEnclaveId;
   late NearbyService nearbyService;
   late StreamSubscription subscription;
   late StreamSubscription receivedDataSubscription;
-  bool isOwner = false; // Tracks if current user is the enclave owner
+  bool isOwner = false;
 
   @override
   void initState() {
@@ -56,19 +56,41 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
     loadEnclaves();
   }
 
-  // Add this helper method for connecting to a device
-  void connectToDevice(Device device) async {
-    if (device.state == SessionState.notConnected) {
-      try {
-        // Attempt to connect to the selected device
-        await nearbyService.invitePeer(deviceID: device.deviceId, deviceName: device.deviceName);
-        showToast("Connecting to ${device.deviceName}", context: context);
-      } catch (e) {
-        showToast("Failed to connect: $e", context: context);
+  void initNearbyService() async {
+    nearbyService = NearbyService();
+    await nearbyService.init(
+      serviceType: 'enclave_conn',
+      strategy: Strategy.P2P_CLUSTER,
+      callback: (isRunning) async {
+        if (isRunning) {
+          startBrowsingForDevices();
+        }
+      },
+    );
+
+    // Subscribe to device state changes
+    subscription = nearbyService.stateChangedSubscription(callback: (devicesList) {
+      setState(() {
+        nearbyDevices = devicesList;
+      });
+    });
+
+    // Subscribe to data received events for syncing
+    receivedDataSubscription = nearbyService.dataReceivedSubscription(callback: (data) {
+      final receivedMessage = jsonDecode(data['message']);
+      if (receivedMessage['type'] == 'enclave_list') {
+        _showEnclavesToJoin(receivedMessage['enclaves'], data['deviceId']);
+      } else if (receivedMessage['type'] == 'join_request') {
+        _showJoinRequest(receivedMessage['enclave_name'], data['deviceId']);
+      } else if (receivedMessage['type'] == 'join_approval') {
+        _handleJoinApproval(receivedMessage['enclave_name']);
       }
-    } else {
-      showToast("${device.deviceName} is already connected", context: context);
-    }
+    });
+  }
+
+  void startBrowsingForDevices() async {
+    await nearbyService.stopBrowsingForPeers();
+    await nearbyService.startBrowsingForPeers();
   }
 
   Future<void> loadEnclaves() async {
@@ -86,64 +108,12 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
     startAdvertisingEnclaves();
   }
 
-  Future<void> deleteEnclave(int enclaveId) async {
-    await DatabaseHelper.instance.deleteEnclave(enclaveId);
-    await loadEnclaves();
-  }
-
   void startAdvertisingEnclaves() async {
-    await nearbyService.stopAdvertisingPeer(); // Stop any existing advertising
-    await nearbyService.startAdvertisingPeer(); // Start advertising own enclaves
+    await nearbyService.stopAdvertisingPeer();
+    await nearbyService.startAdvertisingPeer();
     showToast("Advertising owned enclaves", context: context);
   }
 
-  void startBrowsingForDevices() async {
-    await nearbyService.stopBrowsingForPeers(); // Stop any existing browsing
-    await nearbyService.startBrowsingForPeers(); // Browse for devices advertising enclaves
-  }
-
-  void initNearbyService() async {
-    nearbyService = NearbyService();
-    await nearbyService.init(
-      serviceType: 'enclave_conn',
-      strategy: Strategy.P2P_CLUSTER,
-      callback: (isRunning) async {
-        if (isRunning) {
-          startBrowsingForDevices();
-        }
-      },
-    );
-
-    // Listen for state changes in nearby devices
-    subscription = nearbyService.stateChangedSubscription(callback: (devicesList) {
-      setState(() {
-        nearbyDevices = devicesList;
-      });
-    });
-
-    // Handle incoming data from other devices
-    receivedDataSubscription = nearbyService.dataReceivedSubscription(callback: (data) {
-      final receivedMessage = jsonDecode(data['message']);
-      if (receivedMessage['type'] == 'enclave_list') {
-        _showEnclavesToJoin(receivedMessage['enclaves'], data['deviceId']);
-      } else if (receivedMessage['type'] == 'join_request') {
-        _showJoinRequest(receivedMessage['enclave_name'], data['deviceId']);
-      } else if (receivedMessage['type'] == 'join_approval') {
-        _handleJoinApproval(receivedMessage['enclave_name']);
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    subscription.cancel();
-    receivedDataSubscription.cancel();
-    nearbyService.stopAdvertisingPeer();
-    nearbyService.stopBrowsingForPeers();
-    super.dispose();
-  }
-
-  // Show list of enclaves available to join
   void _showEnclavesToJoin(List enclaves, String deviceId) {
     showDialog(
       context: context,
@@ -165,7 +135,6 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
     );
   }
 
-  // Send a request to join a specific enclave on another device
   void _requestJoinEnclave(String enclaveName, String deviceId) {
     final message = jsonEncode({
       'type': 'join_request',
@@ -176,9 +145,6 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
     showToast("Requested to join enclave: $enclaveName", context: context);
   }
 
-  //AIzaSyBX7UoM_YCPffDGIOjDHJlrXGQa2_vk6Ho
-
-  // Show a join request for approval
   void _showJoinRequest(String enclaveName, String deviceId) {
     showDialog(
       context: context,
@@ -204,7 +170,6 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
     );
   }
 
-  // Approve the join request and notify the requester
   void _approveJoinRequest(String enclaveName, String deviceId) {
     final message = jsonEncode({
       'type': 'join_approval',
@@ -214,11 +179,26 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
     showToast("Approved join request for: $enclaveName", context: context);
   }
 
-  // Handle approval and add user to the enclave
   void _handleJoinApproval(String enclaveName) async {
     await DatabaseHelper.instance.joinEnclave(enclaveName);
     await loadEnclaves();
     showToast("Successfully joined enclave: $enclaveName", context: context);
+  }
+
+  void _sendEnclaveList(String deviceId) {
+    final message = jsonEncode({
+      'type': 'enclave_list',
+      'enclaves': ownedEnclaves,
+    });
+    nearbyService.sendMessage(deviceId, message);
+    showToast("Sent enclave list to $deviceId", context: context);
+  }
+
+  Future<void> deleteEnclave(int enclaveId) async {
+    // Call the DatabaseHelper to delete the enclave and its associated data
+    await DatabaseHelper.instance.deleteEnclave(enclaveId);
+    await loadEnclaves();
+    showToast("Enclave deleted successfully", context: context);
   }
 
   @override
@@ -231,7 +211,6 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
             onPressed: () => _showCreateEnclaveDialog(),
             child: Text("Create New Enclave"),
           ),
-// Owned Enclaves ListView.builder
           Expanded(
             child: ListView.builder(
               itemCount: ownedEnclaves.length,
@@ -250,7 +229,6 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
                       builder: (context) => EnclaveMapScreen(
                         enclaveId: enclave['id'],
                         enclaveName: enclave['name'],
-
                       ),
                     ),
                   ),
@@ -259,7 +237,6 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
             ),
           ),
           Divider(),
-          // Joined Enclaves ListView.builder
           Expanded(
             child: ListView.builder(
               itemCount: joinedEnclaves.length,
@@ -273,7 +250,7 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
                     MaterialPageRoute(
                       builder: (context) => EnclaveMapScreen(
                         enclaveId: enclave['id'],
-                        enclaveName: enclave['name']
+                        enclaveName: enclave['name'],
                       ),
                     ),
                   ),
@@ -309,6 +286,19 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
     );
   }
 
+  void connectToDevice(Device device) async {
+    if (device.state == SessionState.notConnected) {
+      try {
+        await nearbyService.invitePeer(deviceID: device.deviceId, deviceName: device.deviceName);
+        showToast("Connecting to ${device.deviceName}", context: context);
+      } catch (e) {
+        showToast("Failed to connect: $e", context: context);
+      }
+    } else {
+      showToast("${device.deviceName} is already connected", context: context);
+    }
+  }
+
   String getStateName(SessionState state) {
     switch (state) {
       case SessionState.notConnected:
@@ -320,15 +310,6 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
       default:
         return "Unknown";
     }
-  }
-
-  void _sendEnclaveList(String deviceId) {
-    final message = jsonEncode({
-      'type': 'enclave_list',
-      'enclaves': ownedEnclaves,
-    });
-    nearbyService.sendMessage(deviceId, message);
-    showToast("Sent enclave list to ${deviceId}", context: context);
   }
 
   void _showCreateEnclaveDialog() {
@@ -370,6 +351,13 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
       },
     );
   }
+
+  @override
+  void dispose() {
+    subscription.cancel();
+    receivedDataSubscription.cancel();
+    nearbyService.stopAdvertisingPeer();
+    nearbyService.stopBrowsingForPeers();
+    super.dispose();
+  }
 }
-
-
