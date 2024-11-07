@@ -1,6 +1,8 @@
 # enclove
 
-hello world type app, for now this is just sends p2p messages trough bluetooth
+- Peer connecting trough bluetooth functionality;
+- Can join and create Enclaves;
+- Can add pins;
 
 # Useful Commands
 - flutter devices

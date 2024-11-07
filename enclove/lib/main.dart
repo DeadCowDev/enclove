@@ -5,6 +5,7 @@ import 'package:flutter_styled_toast/flutter_styled_toast.dart';
 import 'package:flutter_nearby_connections/flutter_nearby_connections.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'database/database_helper.dart';
+import 'enclave_map_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,6 +19,7 @@ Future<void> requestPermissions() async {
     Permission.bluetooth,
     Permission.bluetoothConnect,
     Permission.bluetoothAdvertise,
+    Permission.locationWhenInUse,
   ].request();
 }
 
@@ -38,13 +40,14 @@ class EnclavesScreen extends StatefulWidget {
 }
 
 class _EnclavesScreenState extends State<EnclavesScreen> {
-  List<Map<String, dynamic>> enclaves = [];
-  List<Map<String, dynamic>> messages = [];
+  List<Map<String, dynamic>> ownedEnclaves = []; // Enclaves this user owns
+  List<Map<String, dynamic>> joinedEnclaves = []; // Enclaves this user has joined
   List<Device> nearbyDevices = [];
   int? selectedEnclaveId;
   late NearbyService nearbyService;
   late StreamSubscription subscription;
   late StreamSubscription receivedDataSubscription;
+  bool isOwner = false; // Tracks if current user is the enclave owner
 
   @override
   void initState() {
@@ -53,18 +56,34 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
     loadEnclaves();
   }
 
+  // Add this helper method for connecting to a device
+  void connectToDevice(Device device) async {
+    if (device.state == SessionState.notConnected) {
+      try {
+        // Attempt to connect to the selected device
+        await nearbyService.invitePeer(deviceID: device.deviceId, deviceName: device.deviceName);
+        showToast("Connecting to ${device.deviceName}", context: context);
+      } catch (e) {
+        showToast("Failed to connect: $e", context: context);
+      }
+    } else {
+      showToast("${device.deviceName} is already connected", context: context);
+    }
+  }
+
   Future<void> loadEnclaves() async {
     final dbEnclaves = await DatabaseHelper.instance.getEnclaves();
     setState(() {
-      enclaves = dbEnclaves.where((e) => e['is_member'] == 1).toList();
+      ownedEnclaves = dbEnclaves.where((e) => e['created_by_me'] == 1).toList();
+      joinedEnclaves = dbEnclaves.where((e) => e['is_member'] == 1 && e['created_by_me'] == 0).toList();
     });
-    startAdvertisingEnclaves();  // Start advertising the user's enclaves
+    startAdvertisingEnclaves();
   }
 
   Future<void> createEnclave(String name, String description) async {
     await DatabaseHelper.instance.createEnclave(name, description);
     await loadEnclaves();
-    startAdvertisingEnclaves(); // Ensure the new enclave is also advertised
+    startAdvertisingEnclaves();
   }
 
   Future<void> deleteEnclave(int enclaveId) async {
@@ -73,17 +92,14 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
   }
 
   void startAdvertisingEnclaves() async {
-    await nearbyService.stopAdvertisingPeer(); // Stop any existing advertising session
-    enclaves.forEach((enclave) async {
-      // Encode enclave data to include name and description
-      await nearbyService.startAdvertisingPeer();
-      showToast("Advertising Enclave: ${enclave['name']}", context: context);
-    });
+    await nearbyService.stopAdvertisingPeer(); // Stop any existing advertising
+    await nearbyService.startAdvertisingPeer(); // Start advertising own enclaves
+    showToast("Advertising owned enclaves", context: context);
   }
 
-  Future<void> startBrowsingForEnclaves() async {
-    await nearbyService.stopBrowsingForPeers(); // Stop any existing browsing session
-    await nearbyService.startBrowsingForPeers();
+  void startBrowsingForDevices() async {
+    await nearbyService.stopBrowsingForPeers(); // Stop any existing browsing
+    await nearbyService.startBrowsingForPeers(); // Browse for devices advertising enclaves
   }
 
   void initNearbyService() async {
@@ -93,23 +109,27 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
       strategy: Strategy.P2P_CLUSTER,
       callback: (isRunning) async {
         if (isRunning) {
-          await startBrowsingForEnclaves(); // Continuous browsing for other enclaves
+          startBrowsingForDevices();
         }
       },
     );
 
-    // Listen for nearby devices that advertise enclaves
+    // Listen for state changes in nearby devices
     subscription = nearbyService.stateChangedSubscription(callback: (devicesList) {
       setState(() {
         nearbyDevices = devicesList;
       });
     });
 
-    // Listen for messages from nearby devices (e.g., join requests)
+    // Handle incoming data from other devices
     receivedDataSubscription = nearbyService.dataReceivedSubscription(callback: (data) {
       final receivedMessage = jsonDecode(data['message']);
-      if (receivedMessage['type'] == 'join_request') {
-        showToast("Received Join Request for Enclave: ${receivedMessage['enclave_name']}", context: context);
+      if (receivedMessage['type'] == 'enclave_list') {
+        _showEnclavesToJoin(receivedMessage['enclaves'], data['deviceId']);
+      } else if (receivedMessage['type'] == 'join_request') {
+        _showJoinRequest(receivedMessage['enclave_name'], data['deviceId']);
+      } else if (receivedMessage['type'] == 'join_approval') {
+        _handleJoinApproval(receivedMessage['enclave_name']);
       }
     });
   }
@@ -123,6 +143,84 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
     super.dispose();
   }
 
+  // Show list of enclaves available to join
+  void _showEnclavesToJoin(List enclaves, String deviceId) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text("Join an Enclave"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: enclaves.map<Widget>((enclave) {
+              return ListTile(
+                title: Text(enclave['name']),
+                subtitle: Text(enclave['description']),
+                onTap: () => _requestJoinEnclave(enclave['name'], deviceId),
+              );
+            }).toList(),
+          ),
+        );
+      },
+    );
+  }
+
+  // Send a request to join a specific enclave on another device
+  void _requestJoinEnclave(String enclaveName, String deviceId) {
+    final message = jsonEncode({
+      'type': 'join_request',
+      'enclave_name': enclaveName,
+    });
+    nearbyService.sendMessage(deviceId, message);
+    Navigator.of(context).pop();
+    showToast("Requested to join enclave: $enclaveName", context: context);
+  }
+
+  //AIzaSyBX7UoM_YCPffDGIOjDHJlrXGQa2_vk6Ho
+
+  // Show a join request for approval
+  void _showJoinRequest(String enclaveName, String deviceId) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text("Join Request"),
+          content: Text("User requests to join your enclave: $enclaveName"),
+          actions: [
+            TextButton(
+              onPressed: () {
+                _approveJoinRequest(enclaveName, deviceId);
+                Navigator.of(context).pop();
+              },
+              child: Text("Approve"),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text("Deny"),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // Approve the join request and notify the requester
+  void _approveJoinRequest(String enclaveName, String deviceId) {
+    final message = jsonEncode({
+      'type': 'join_approval',
+      'enclave_name': enclaveName,
+    });
+    nearbyService.sendMessage(deviceId, message);
+    showToast("Approved join request for: $enclaveName", context: context);
+  }
+
+  // Handle approval and add user to the enclave
+  void _handleJoinApproval(String enclaveName) async {
+    await DatabaseHelper.instance.joinEnclave(enclaveName);
+    await loadEnclaves();
+    showToast("Successfully joined enclave: $enclaveName", context: context);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -133,33 +231,58 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
             onPressed: () => _showCreateEnclaveDialog(),
             child: Text("Create New Enclave"),
           ),
+// Owned Enclaves ListView.builder
           Expanded(
             child: ListView.builder(
-              itemCount: enclaves.length,
+              itemCount: ownedEnclaves.length,
               itemBuilder: (context, index) {
-                final enclave = enclaves[index];
+                final enclave = ownedEnclaves[index];
                 return ListTile(
                   title: Text(enclave['name']),
                   subtitle: Text(enclave['description'] ?? ""),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (enclave['created_by_me'] == 1)
-                        IconButton(
-                          icon: Icon(Icons.delete),
-                          onPressed: () => deleteEnclave(enclave['id']),
-                        ),
-                      IconButton(
-                        icon: Icon(Icons.message),
-                        onPressed: () => loadMessages(enclave['id']),
+                  trailing: IconButton(
+                    icon: Icon(Icons.delete),
+                    onPressed: () => deleteEnclave(enclave['id']),
+                  ),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => EnclaveMapScreen(
+                        enclaveId: enclave['id'],
+                        enclaveName: enclave['name'],
+
                       ),
-                    ],
+                    ),
                   ),
                 );
               },
             ),
           ),
           Divider(),
+          // Joined Enclaves ListView.builder
+          Expanded(
+            child: ListView.builder(
+              itemCount: joinedEnclaves.length,
+              itemBuilder: (context, index) {
+                final enclave = joinedEnclaves[index];
+                return ListTile(
+                  title: Text(enclave['name']),
+                  subtitle: Text(enclave['description'] ?? ""),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => EnclaveMapScreen(
+                        enclaveId: enclave['id'],
+                        enclaveName: enclave['name']
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          Divider(),
+          Text("Nearby Devices"),
           Expanded(
             child: ListView.builder(
               itemCount: nearbyDevices.length,
@@ -169,40 +292,18 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
                   title: Text(device.deviceName),
                   subtitle: Text(getStateName(device.state)),
                   trailing: IconButton(
-                    icon: Icon(Icons.person_add),
-                    onPressed: () => sendJoinRequest(device),
+                    icon: Icon(device.state == SessionState.notConnected ? Icons.person_add : Icons.message),
+                    onPressed: () => connectToDevice(device),
                   ),
+                  onTap: () {
+                    if (device.state == SessionState.connected) {
+                      _sendEnclaveList(device.deviceId);
+                    }
+                  },
                 );
               },
             ),
           ),
-          if (selectedEnclaveId != null) ...[
-            Divider(),
-            Expanded(
-              child: ListView.builder(
-                itemCount: messages.length,
-                itemBuilder: (context, index) {
-                  final message = messages[index];
-                  return ListTile(
-                    title: Text(message['content']),
-                    subtitle: Text(message['timestamp']),
-                  );
-                },
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: TextField(
-                onSubmitted: (text) {
-                  sendMessage(text);
-                },
-                decoration: InputDecoration(
-                  labelText: 'Enter message',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -221,29 +322,13 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
     }
   }
 
-  Future<void> loadMessages(int enclaveId) async {
-    final dbMessages = await DatabaseHelper.instance.getMessages(enclaveId);
-    setState(() {
-      messages = dbMessages;
-      selectedEnclaveId = enclaveId;
-    });
-  }
-
-  void sendMessage(String content) async {
-    if (selectedEnclaveId != null) {
-      await DatabaseHelper.instance.insertMessage(content, selectedEnclaveId!);
-      await loadMessages(selectedEnclaveId!);
-    }
-  }
-
-  Future<void> sendJoinRequest(Device device) async {
-    // Encode a join request message
+  void _sendEnclaveList(String deviceId) {
     final message = jsonEncode({
-      'type': 'join_request',
-      'enclave_name': enclaves.first['name'], // Change this to send the desired enclave name
+      'type': 'enclave_list',
+      'enclaves': ownedEnclaves,
     });
-    nearbyService.sendMessage(device.deviceId, message);
-    showToast("Sent join request for enclave: ${enclaves.first['name']}", context: context);
+    nearbyService.sendMessage(deviceId, message);
+    showToast("Sent enclave list to ${deviceId}", context: context);
   }
 
   void _showCreateEnclaveDialog() {
@@ -251,37 +336,40 @@ class _EnclavesScreenState extends State<EnclavesScreen> {
     final descriptionController = TextEditingController();
 
     showDialog(
-        context: context,
-        builder: (context) {
-          return AlertDialog(
-            title: Text("Create Enclave"),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameController,
-                  decoration: InputDecoration(labelText: "Enclave Name"),
-                ),
-                TextField(
-                  controller: descriptionController,
-                  decoration: InputDecoration(labelText: "Description"),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: Text("Cancel"),
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text("Create Enclave"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                decoration: InputDecoration(labelText: "Enclave Name"),
               ),
-              TextButton(
-                onPressed: () {
-                  createEnclave(nameController.text, descriptionController.text);
-                  Navigator.of(context).pop();
-                },
-                child: Text("Create"),
+              TextField(
+                controller: descriptionController,
+                decoration: InputDecoration(labelText: "Description"),
               ),
             ],
-          );
-        });
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text("Cancel"),
+            ),
+            TextButton(
+              onPressed: () {
+                createEnclave(nameController.text, descriptionController.text);
+                Navigator.of(context).pop();
+              },
+              child: Text("Create"),
+            ),
+          ],
+        );
+      },
+    );
   }
 }
+
+

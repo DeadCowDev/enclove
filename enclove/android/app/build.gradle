@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.flutter_application_1"
+    namespace = "com.example.enclove"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = "25.1.8937393"
 
