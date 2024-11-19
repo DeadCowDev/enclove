@@ -16,22 +16,31 @@ class EnclaveMapScreen extends StatefulWidget {
 
 class _EnclaveMapScreenState extends State<EnclaveMapScreen> {
   late MapController mapController;
+  bool isPinsLoaded = false; // Track if pins are loaded
+
 
   @override
   void initState() {
     super.initState();
     mapController = MapController(widget.enclaveId, onPinsLoaded: () {
-      setState(() {}); // Rebuild when pins are loaded or updated
+      setState(() {
+        isPinsLoaded = true; // Mark pins as loaded
+      }); // Rebuild when pins are loaded or updated
     });
-    mapController.fetchCurrentLocation();
-    mapController.loadEnclavePins();
+    _initializeMap(); // Call async initialization (not directly awaited)
+  }
+
+  // Async initialization
+  Future<void> _initializeMap() async {
+    await mapController.fetchCurrentLocation(); // Wait for current location
+    await mapController.loadEnclavePins();      // Wait for pins to load
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(widget.enclaveName)),
-      body: mapController.currentLocation == null
+      body: mapController.currentLocation == null || !isPinsLoaded
           ? Center(child: CircularProgressIndicator())
           : GoogleMap(
         initialCameraPosition: CameraPosition(

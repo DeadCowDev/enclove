@@ -8,7 +8,6 @@ class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._privateConstructor();
   static SqliteCrdt? _database;
 
-
   DatabaseHelper._privateConstructor();
 
   Future<SqliteCrdt> get database async {
@@ -33,6 +32,7 @@ class DatabaseHelper {
           content TEXT NOT NULL,
           timestamp TEXT NOT NULL,
           enclave_id INTEGER NOT NULL
+          deleted INTEGER DEFAULT 0
         )
       ''');
 
@@ -43,6 +43,7 @@ class DatabaseHelper {
           description TEXT,
           is_member INTEGER NOT NULL DEFAULT 0,
           created_by_me INTEGER NOT NULL DEFAULT 0
+          deleted INTEGER DEFAULT 0
         )
       ''');
 
@@ -55,6 +56,7 @@ class DatabaseHelper {
           description TEXT,
           is_synced INTEGER NOT NULL DEFAULT 0,
           requires_approval INTEGER NOT NULL DEFAULT 0
+          deleted INTEGER DEFAULT 0
         )
       ''');
     });
@@ -66,6 +68,16 @@ class DatabaseHelper {
     await db.execute(
       'UPDATE pins SET is_joined = 1 WHERE id = ?',
       [pinId],
+    );
+  }
+
+  Future<void> ConflictResolutionExecute (String table, int rowId, dynamic resolution) async {
+
+    final db = await instance.database;
+    
+    await db.execute(
+      'UPDATE $table SET value = ? WHERE id = ?',
+      [resolution, rowId],
     );
   }
 
@@ -102,7 +114,7 @@ class DatabaseHelper {
     final db = await instance.database;
 
     final results = await db.query(
-      'SELECT * FROM enclaves ORDER BY name ASC',
+      'SELECT * FROM enclaves WHERE deleted = 0 ORDER BY name ASC ',
     );
 
     return results;
@@ -130,18 +142,18 @@ class DatabaseHelper {
   Future<void> deleteEnclave(int enclaveId) async {
     final db = await instance.database;
 
-    // await db.execute(
-    //   'DELETE FROM messages WHERE enclave_id = ?',
-    //   [enclaveId],
-    // );
-
     await db.execute(
-      'DELETE FROM pins WHERE enclave_id = ?',
+      'UPDATE messages SET deleted = 1 WHERE enclave_id = ?',
       [enclaveId],
     );
 
     await db.execute(
-      'DELETE FROM enclaves WHERE id = ?',
+      'UPDATE pins SET deleted = 1 WHERE enclave_id = ?',
+      [enclaveId],
+    );
+
+    await db.execute(
+      'UPDATE enclaves SET deleted = 1 WHERE id = ?',
       [enclaveId],
     );
   }
@@ -159,7 +171,7 @@ class DatabaseHelper {
     final db = await instance.database;
 
     final results = await db.query(
-      'SELECT * FROM pins WHERE enclave_id = ?',
+      'SELECT * FROM pins WHERE enclave_id = ? AND deleted = 0',
       [enclaveId],
     );
 

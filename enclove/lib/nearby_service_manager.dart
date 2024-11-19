@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import '../database/database_helper.dart';
 import 'package:flutter_nearby_connections/flutter_nearby_connections.dart';
 
 class NearbyServiceManager{
@@ -9,8 +10,10 @@ class NearbyServiceManager{
   late StreamSubscription subscription;
   List<Device> nearbyDevices = [];
 
+
   void initializeNearbyService() async {
     nearbyService = NearbyService();
+
     await nearbyService.init(
       serviceType: 'enclave_conn',
       strategy: Strategy.P2P_CLUSTER,
@@ -36,7 +39,6 @@ class NearbyServiceManager{
 
     await startBrowsingForDevices();
    }
-
 
   Future<void> startBrowsingForDevices() async {
     await nearbyService.startAdvertisingPeer();
